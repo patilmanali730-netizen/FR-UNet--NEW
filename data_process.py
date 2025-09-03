@@ -7,74 +7,94 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from ruamel.yaml import safe_load
+from ruamel.yaml import YAML  # updated import
 from torchvision.transforms import Grayscale, Normalize, ToTensor
 from utils.helpers import dir_exists, remove_files
 
 
 def data_process(data_path, name, patch_size, stride, mode):
+    # Set the save path for processed data
     save_path = os.path.join(data_path, f"{mode}_pro")
     dir_exists(save_path)
     remove_files(save_path)
+
+    # Correctly handle dataset paths based on mode and dataset name
     if name == "DRIVE":
         img_path = os.path.join(data_path, mode, "images")
-        gt_path = os.path.join(data_path, mode, "1st_manual")
+        gt_path = os.path.join(data_path, mode, "labels")
         file_list = list(sorted(os.listdir(img_path)))
     elif name == "CHASEDB1":
-        file_list = list(sorted(os.listdir(data_path)))
+        # The script will now look into the correct subfolders based on the mode
+        img_path = os.path.join(data_path, mode, "images")
+        gt_path = os.path.join(data_path, mode, "labels")
+        file_list = list(sorted(os.listdir(img_path)))
     elif name == "STARE":
         img_path = os.path.join(data_path, "stare-images")
         gt_path = os.path.join(data_path, "labels-ah")
         file_list = list(sorted(os.listdir(img_path)))
     elif name == "DCA1":
-        data_path = os.path.join(data_path, "Database_134_Angiograms")
-        file_list = list(sorted(os.listdir(data_path)))
+        # Handle the DCA1 dataset, which has a similar structure
+        img_path = os.path.join(data_path, mode, "images")
+        gt_path = os.path.join(data_path, mode, "labels")
+        file_list = list(sorted(os.listdir(img_path)))
     elif name == "CHUAC":
         img_path = os.path.join(data_path, "Original")
         gt_path = os.path.join(data_path, "Photoshop")
         file_list = list(sorted(os.listdir(img_path)))
+    
     img_list = []
     gt_list = []
     for i, file in enumerate(file_list):
         if name == "DRIVE":
             img = Image.open(os.path.join(img_path, file))
-            gt = Image.open(os.path.join(gt_path, file[0:2] + "_manual1.gif"))
+            gt = Image.open(os.path.join(gt_path, file[0:2] + "_manual1.png"))
             img = Grayscale(1)(img)
             img_list.append(ToTensor()(img))
             gt_list.append(ToTensor()(gt))
 
         elif name == "CHASEDB1":
-            if len(file) == 13:
-                if mode == "training" and int(file[6:8]) <= 10:
-                    img = Image.open(os.path.join(data_path, file))
-                    gt = Image.open(os.path.join(
-                        data_path, file[0:9] + '_1stHO.png'))
-                    img = Grayscale(1)(img)
-                    img_list.append(ToTensor()(img))
-                    gt_list.append(ToTensor()(gt))
-                elif mode == "test" and int(file[6:8]) > 10:
-                    img = Image.open(os.path.join(data_path, file))
-                    gt = Image.open(os.path.join(
-                        data_path, file[0:9] + '_1stHO.png'))
-                    img = Grayscale(1)(img)
-                    img_list.append(ToTensor()(img))
-                    gt_list.append(ToTensor()(gt))
+            # The logic for CHASEDB1 is updated to correctly match image and label filenames.
+            img = Image.open(os.path.join(img_path, file))
+            # Get the filename without the extension, e.g., "Image_01L"
+            filename_no_ext = os.path.splitext(file)[0]
+            # Construct the correct label filename, e.g., "Image_01L_1stHO.png"
+            label_filename = filename_no_ext + '_1stHO.png'
+            gt_file_path = os.path.join(gt_path, label_filename)
+            
+            # Add a check for file existence to handle missing files gracefully
+            if not os.path.exists(gt_file_path):
+                print(f"Warning: Ground truth file not found for {file}. Expected: {gt_file_path}")
+                continue # Skip to the next file
+            
+            try:
+                gt = Image.open(gt_file_path)
+            except FileNotFoundError:
+                print(f"Error opening file: {gt_file_path}. Skipping.")
+                continue # Skip to the next file
+
+            img = Grayscale(1)(img)
+            img_list.append(ToTensor()(img))
+            gt_list.append(ToTensor()(gt))
+
         elif name == "DCA1":
-            if len(file) <= 7:
-                if mode == "training" and int(file[:-4]) <= 100:
-                    img = cv2.imread(os.path.join(data_path, file), 0)
-                    gt = cv2.imread(os.path.join(
-                        data_path, file[:-4] + '_gt.pgm'), 0)
-                    gt = np.where(gt >= 100, 255, 0).astype(np.uint8)
-                    img_list.append(ToTensor()(img))
-                    gt_list.append(ToTensor()(gt))
-                elif mode == "test" and int(file[:-4]) > 100:
-                    img = cv2.imread(os.path.join(data_path, file), 0)
-                    gt = cv2.imread(os.path.join(
-                        data_path, file[:-4] + '_gt.pgm'), 0)
-                    gt = np.where(gt >= 100, 255, 0).astype(np.uint8)
-                    img_list.append(ToTensor()(img))
-                    gt_list.append(ToTensor()(gt))
+            # Similar to CHASEDB1, the logic is simplified
+            img = cv2.imread(os.path.join(img_path, file), 0)
+            gt_file_path = os.path.join(gt_path, file[:-4] + '_gt.pgm')
+
+            # Add check for file existence to prevent TypeError
+            if not os.path.exists(gt_file_path):
+                print(f"Warning: Ground truth file not found for {file}. Expected: {gt_file_path}")
+                continue
+
+            gt = cv2.imread(gt_file_path, 0)
+            if gt is None:
+                print(f"Error reading file: {gt_file_path}. Skipping.")
+                continue
+            
+            gt = np.where(gt >= 100, 255, 0).astype(np.uint8)
+            img_list.append(ToTensor()(img))
+            gt_list.append(ToTensor()(gt))
+
         elif name == "CHUAC":
             if mode == "training" and int(file[:-4]) <= 20:
                 img = cv2.imread(os.path.join(img_path, file), 0)
@@ -83,7 +103,7 @@ def data_process(data_path, name, patch_size, stride, mode):
                 else:
                     tail = "png"
                 gt = cv2.imread(os.path.join(
-                    gt_path, "angio"+file[:-4] + "ok."+tail), 0)
+                    gt_path, "angio" + file[:-4] + "ok." + tail), 0)
                 gt = np.where(gt >= 100, 255, 0).astype(np.uint8)
                 img = cv2.resize(
                     img, (512, 512), interpolation=cv2.INTER_LINEAR)
@@ -94,7 +114,7 @@ def data_process(data_path, name, patch_size, stride, mode):
             elif mode == "test" and int(file[:-4]) > 20:
                 img = cv2.imread(os.path.join(img_path, file), 0)
                 gt = cv2.imread(os.path.join(
-                    gt_path, "angio"+file[:-4] + "ok.png"), 0)
+                    gt_path, "angio" + file[:-4] + "ok.png"), 0)
                 gt = np.where(gt >= 100, 255, 0).astype(np.uint8)
                 img = cv2.resize(
                     img, (512, 512), interpolation=cv2.INTER_LINEAR)
@@ -111,6 +131,8 @@ def data_process(data_path, name, patch_size, stride, mode):
                 img = Grayscale(1)(img)
                 img_list.append(ToTensor()(img))
                 gt_list.append(ToTensor()(gt))
+
+    # The error happens here, but it's a symptom of the empty list above
     img_list = normalization(img_list)
     if mode == "training":
         img_patch = get_patch(img_list, patch_size, stride)
@@ -134,11 +156,10 @@ def get_square(img_list, name):
     elif name == "DCA1":
         shape = 320
     _, h, w = img_list[0].shape
-    pad = nn.ConstantPad2d((0, shape-w, 0, shape-h), 0)
+    pad = nn.ConstantPad2d((0, shape - w, 0, shape - h), 0)
     for i in range(len(img_list)):
         img = pad(img_list[i])
         img_s.append(img)
-
     return img_s
 
 
@@ -187,16 +208,18 @@ def normalization(imgs_list):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-dp', '--dataset_path', default="datasets/DRIVE", type=str,
-                        help='the path of dataset',required=True)
+                        help='the path of dataset', required=True)
     parser.add_argument('-dn', '--dataset_name', default="DRIVE", type=str,
-                        help='the name of dataset',choices=['DRIVE','CHASEDB1','STARE','CHUAC','DCA1'],required=True)
+                        help='the name of dataset', choices=['DRIVE', 'CHASEDB1', 'STARE', 'CHUAC', 'DCA1'], required=True)
     parser.add_argument('-ps', '--patch_size', default=48,
                         help='the size of patch for image partition')
     parser.add_argument('-s', '--stride', default=6,
                         help='the stride of image partition')
     args = parser.parse_args()
+
+    yaml = YAML(typ='safe', pure=True)  # create safe YAML loader
     with open('config.yaml', encoding='utf-8') as file:
-        CFG = safe_load(file)  # 为列表类型
+        CFG = yaml.load(file)  # load the YAML config safely
 
     data_process(args.dataset_path, args.dataset_name,
                  args.patch_size, args.stride, "training")
